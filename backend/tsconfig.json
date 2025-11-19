@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2021",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "noImplicitAny": false,
+    "strictBindCallApply": false,
+    "forceConsistentCasingInFileNames": false,
+    "noFallthroughCasesInSwitch": false,
+    "paths": {
+      "@app/auth": ["libs/auth/src"],
+      "@app/agents": ["libs/agents/src"],
+      "@app/chat": ["libs/chat/src"],
+      "@app/triggers": ["libs/triggers/src"],
+      "@app/runs": ["libs/runs/src"],
+      "@app/tools": ["libs/tools/src"],
+      "@app/detections": ["libs/detections/src"],
+      "@app/audit": ["libs/audit/src"],
+      "@app/metrics": ["libs/metrics/src"],
+      "@app/notifications": ["libs/notifications/src"],
+      "@app/llm": ["libs/llm/src"],
+      "@app/embeddings": ["libs/embeddings/src"],
+      "@app/files": ["libs/files/src"],
+      "@app/common": ["libs/common/src"]
+    }
+  },
+  "include": ["apps/**/*", "libs/**/*"],
+  "exclude": ["node_modules", "dist", "test", "**/*spec.ts"]
+}

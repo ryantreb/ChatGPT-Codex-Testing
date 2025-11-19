@@ -1,0 +1,552 @@
+// Prisma schema for SecOps AI Agent Platform
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// ============================================================================
+// ORGANIZATIONS & USERS
+// ============================================================================
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Settings
+  defaultModelAlias String?
+  defaultRegion     String?
+
+  // Relations
+  memberships       OrgMembership[]
+  users             User[]
+  roles             Role[]
+  agents            Agent[]
+  chats             Chat[]
+  files             File[]
+  tools             Tool[]
+  detections        Detection[]
+  contextDocuments  ContextDocument[]
+  apiKeys           ApiKey[]
+  auditLogs         AuditLog[]
+  metricSnapshots   MetricSnapshot[]
+  agentMemories     AgentMemory[]
+
+  @@map("organizations")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  name         String?
+  passwordHash String?
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // SSO
+  ssoProvider   String?
+  ssoProviderId String?
+
+  // Relations
+  organizations     Organization[]
+  memberships       OrgMembership[]
+  chats             Chat[]
+  uploadedFiles     File[]
+  createdApiKeys    ApiKey[]
+  auditLogs         AuditLog[]
+  agentRuns         AgentRun[]
+  createdAgents     Agent[]
+  systemPrompts     AgentSystemPrompt[]
+  contextDocuments  ContextDocument[]
+
+  @@map("users")
+}
+
+model OrgMembership {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  roleId         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@map("org_memberships")
+}
+
+model Role {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  isSystem       Boolean  @default(false) // For built-in roles
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  permissions  RolePermission[]
+  memberships  OrgMembership[]
+
+  @@unique([organizationId, name])
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  key         String   @unique // e.g., "agents.create", "detections.view"
+  module      String // e.g., "agents", "detections", "settings"
+  action      String // e.g., "create", "read", "update", "delete", "run"
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model ApiKey {
+  id             String    @id @default(uuid())
+  organizationId String
+  name           String
+  keyHash        String    @unique
+  createdByUserId String
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation(fields: [createdByUserId], references: [id])
+
+  @@map("api_keys")
+}
+
+// ============================================================================
+// AGENTS & SYSTEM PROMPTS
+// ============================================================================
+
+model Agent {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  type           String // "copilot" | "scheduled" | "webhook" | "email" | "manual"
+  planningMode   String   @default("single_step") // "single_step" | "plan_and_execute" | "loop_with_limits"
+  status         String   @default("draft") // "draft" | "active" | "paused" | "archived"
+  defaultModelAlias String?
+  maxSteps       Int?
+  maxDuration    Int?     // seconds
+  createdByUserId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy      User                @relation(fields: [createdByUserId], references: [id])
+  systemPrompts  AgentSystemPrompt[]
+  triggers       AgentTrigger[]
+  runs           AgentRun[]
+  chats          Chat[]
+  tools          AgentTool[]
+  detections     Detection[]
+  auditLogs      AuditLog[]
+  memories       AgentMemory[]
+  contextDocs    ContextDocument[]
+
+  @@map("agents")
+}
+
+model AgentSystemPrompt {
+  id               String   @id @default(uuid())
+  agentId          String
+  description      String?
+  prompt           String   @db.Text
+  status           String   @default("draft") // "draft" | "active" | "archived"
+  changedByUserId  String
+  changedByEmail   String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  agent       Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  changedBy   User  @relation(fields: [changedByUserId], references: [id])
+
+  @@map("agent_system_prompts")
+}
+
+model ContextDocument {
+  id             String   @id @default(uuid())
+  organizationId String
+  agentId        String?
+  title          String
+  sourceType     String // "url" | "file" | "doc" | "manual"
+  sourceRef      String?
+  content        String?  @db.Text
+  createdByUserId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent?             @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  createdBy    User               @relation(fields: [createdByUserId], references: [id])
+  chunks       DocumentChunk[]
+
+  @@map("context_documents")
+}
+
+model DocumentChunk {
+  id         String                      @id @default(uuid())
+  documentId String
+  chunkIndex Int
+  content    String                      @db.Text
+  embedding  Unsupported("vector(1536)")?
+  metadata   Json?
+  createdAt  DateTime                    @default(now())
+
+  document ContextDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_chunks")
+}
+
+model AgentMemory {
+  id             String                      @id @default(uuid())
+  agentId        String
+  organizationId String
+  scope          String // "global" | "agent" | "run"
+  key            String
+  value          String                      @db.Text
+  embedding      Unsupported("vector(1536)")?
+  metadata       Json?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  agent        Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("agent_memories")
+}
+
+// ============================================================================
+// TRIGGERS & RUNS
+// ============================================================================
+
+model AgentTrigger {
+  id          String    @id @default(uuid())
+  agentId     String
+  name        String?
+  type        String // "cron" | "webhook" | "email" | "integration"
+  source      String? // e.g., "jira", "slack", "linear", "custom"
+  definition  Json // cron schedule, webhook config, etc.
+  enabled     Boolean   @default(true)
+  secret      String? // webhook secret
+  lastRunAt   DateTime?
+  nextRunAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  agent     Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  runs      AgentRun[]
+  auditLogs AuditLog[]
+
+  @@map("agent_triggers")
+}
+
+model AgentRun {
+  id             String    @id @default(uuid())
+  agentId        String
+  triggerId      String?
+  chatId         String?
+  userId         String?
+  status         String    @default("queued") // "queued" | "running" | "succeeded" | "failed" | "cancelled"
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  input          Json?
+  output         Json?
+  error          String?   @db.Text
+  inputTokens    Int       @default(0)
+  outputTokens   Int       @default(0)
+  totalTokens    Int       @default(0)
+  evalScore      Float?
+  evalExplanation String?  @db.Text
+  evalBulletSummary Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  agent     Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  trigger   AgentTrigger? @relation(fields: [triggerId], references: [id], onDelete: SetNull)
+  chat      Chat?         @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  user      User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  artifacts Artifact[]
+  auditLogs AuditLog[]
+
+  @@map("agent_runs")
+}
+
+// ============================================================================
+// CHAT & FILES
+// ============================================================================
+
+model Chat {
+  id                 String    @id @default(uuid())
+  organizationId     String
+  userId             String
+  agentId            String?
+  title              String?
+  experience         String    @default("chat") // "chat" | "copilot" | "builder"
+  modelAlias         String?
+  triggerId          String?
+  triggerName        String?
+  triggerSource      String?
+  triggerDescription String?
+  isStreaming        Boolean   @default(false)
+  result             Json?
+  error              String?   @db.Text
+  inputTokens        Int       @default(0)
+  outputTokens       Int       @default(0)
+  totalTokens        Int       @default(0)
+  evalScore          Float?
+  evalExplanation    String?   @db.Text
+  evalBulletSummary  Json?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent        Agent?          @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  events       ChatEvent[]
+  runs         AgentRun[]
+  artifacts    Artifact[]
+  auditLogs    AuditLog[]
+
+  @@map("chats")
+}
+
+model ChatEvent {
+  id          String   @id @default(uuid())
+  chatId      String
+  timestamp   BigInt // Unix timestamp in milliseconds
+  sender      String // "user" | "agent" | "system"
+  messageType String // "text" | "tool-call" | "tool-result" | "system"
+  content     String?  @db.Text
+  modelAlias  String?
+  toolCalls   Json? // Array of tool call objects
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  chat        Chat             @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  attachments ChatAttachment[]
+  feedback    ChatFeedback[]
+
+  @@map("chat_events")
+}
+
+model ChatAttachment {
+  id          String   @id @default(uuid())
+  chatEventId String
+  fileId      String
+  createdAt   DateTime @default(now())
+
+  chatEvent ChatEvent @relation(fields: [chatEventId], references: [id], onDelete: Cascade)
+  file      File      @relation(fields: [fileId], references: [id])
+
+  @@map("chat_attachments")
+}
+
+model ChatFeedback {
+  id          String   @id @default(uuid())
+  chatEventId String
+  userId      String?
+  feedbackType String // "thumbs_up" | "thumbs_down"
+  comment     String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  chatEvent ChatEvent @relation(fields: [chatEventId], references: [id], onDelete: Cascade)
+
+  @@unique([chatEventId, userId])
+  @@map("chat_feedback")
+}
+
+model File {
+  id             String   @id @default(uuid())
+  organizationId String
+  uploaderUserId String
+  fileName       String
+  mimeType       String
+  size           Int
+  storagePath    String
+  fileType       String? // "image" | "document" | "log" | "other"
+  previewText    String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploader     User             @relation(fields: [uploaderUserId], references: [id])
+  attachments  ChatAttachment[]
+  artifacts    Artifact[]
+
+  @@map("files")
+}
+
+// ============================================================================
+// TOOLS & INTEGRATIONS
+// ============================================================================
+
+model Tool {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  type           String // "http" | "splunk" | "jira" | "sentinel" | "edr" | "custom"
+  description    String?
+  config         Json // credentials, endpoints, etc.
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agents       AgentTool[]
+
+  @@map("tools")
+}
+
+model AgentTool {
+  id        String   @id @default(uuid())
+  agentId   String
+  toolId    String
+  scopes    Json? // Optional specific scopes/permissions for this tool on this agent
+  createdAt DateTime @default(now())
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  tool  Tool  @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, toolId])
+  @@map("agent_tools")
+}
+
+// ============================================================================
+// DETECTIONS & MITRE
+// ============================================================================
+
+model MitreTechnique {
+  id          String   @id // e.g., "T1566"
+  name        String
+  tactic      String
+  description String?  @db.Text
+  url         String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  detections Detection[]
+
+  @@map("mitre_techniques")
+}
+
+model Detection {
+  id                String   @id @default(uuid())
+  organizationId    String
+  title             String
+  description       String?  @db.Text
+  type              String // "rule" | "pattern-agent"
+  status            String   @default("draft") // "draft" | "active" | "archived"
+  linkedAgentId     String?
+  ruleRef           String? // Reference to external rule system
+  mitreTechniqueIds String[] // Array of MITRE technique IDs
+  severity          String? // "low" | "medium" | "high" | "critical"
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  linkedAgent     Agent?          @relation(fields: [linkedAgentId], references: [id], onDelete: SetNull)
+  mitreTechniques MitreTechnique[]
+
+  @@map("detections")
+}
+
+// ============================================================================
+// ARTIFACTS, AUDIT, METRICS
+// ============================================================================
+
+model Artifact {
+  id             String   @id @default(uuid())
+  organizationId String
+  runId          String?
+  chatId         String?
+  type           String // "report" | "alert" | "ticket" | "notification" | "evidence"
+  title          String
+  data           Json
+  fileId         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  run  AgentRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  chat Chat?     @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  file File?     @relation(fields: [fileId], references: [id])
+
+  @@map("artifacts")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  timestamp      DateTime @default(now())
+  organizationId String
+  event          String
+  actor          String? // User email or "system"
+  userId         String?
+  ipAddress      String?
+  chatId         String?
+  agentId        String?
+  runId          String?
+  triggerId      String?
+  data           Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  chat         Chat?         @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  agent        Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  run          AgentRun?     @relation(fields: [runId], references: [id], onDelete: SetNull)
+  trigger      AgentTrigger? @relation(fields: [triggerId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, timestamp])
+  @@index([event])
+  @@index([userId])
+  @@map("audit_logs")
+}
+
+model MetricSnapshot {
+  id             String   @id @default(uuid())
+  organizationId String
+  periodStart    DateTime
+  periodEnd      DateTime
+  metricType     String // "usage" | "performance" | "detection_coverage"
+  data           Json
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, periodStart])
+  @@map("metric_snapshots")
+}
